@@ -1,0 +1,427 @@
+---
+title: "bayes proj"
+author: "Claire Morrison"
+date: "4/26/2022"
+output:
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(data.table)
+library(psych)
+library(lme4)
+library(lmerTest)
+library(dplyr)
+library(rethinking)
+library(tidyverse)
+library(ggridges)
+library(teamcolors)
+```
+
+
+```{r}
+nba<- fread("/Users/clairemorrison/Documents/Classes/bayes//All_NBA_Data.csv", header=T, data.table=F)
+colnames(nba)
+nrow(nba)
+length(unique(nba$game_id)) ### 1230 games
+head(nba)
+
+
+
+ppy<- fread("/Users/clairemorrison/Documents/Classes/bayes//pts_py.csv", header=T, data.table=F)
+ggplot(data = ppy, aes(x = Season , y = PTS)) +
+    geom_point()+
+  geom_line()
+
+
+ggplot(ppy, aes(x=Season, y=PTS)) +
+  geom_point(color="red", size=4) +
+    geom_line(color="red") +
+  xlab("Season") + 
+  ylab("Average Points per Game")+
+  theme(axis.text.x=element_text(angle=60, hjust=1))
+```
+
+### steps:
+
+convert to wide form to get one row per game (should be 1230 games)
+compute what team won (home vs away?)
+predict win with: Team_orb_pct (offensive rebounds), Team_tov_pct (turnover pct), Team_pace (straight or +/- opp pace), home vs away
+
+
+Fiter to have first team listed be home (reference team), and then only one occurance so we can select just team statistics. Should be 1230 rows (games)
+
+```{r}
+nba <- transform(nba,Team_ID=as.numeric(factor(Team_Abbrev)))
+nba <- transform(nba,Game_ID=as.numeric(factor(game_id)))
+nba <- transform(nba,Player_ID=as.numeric(factor(player_id)))
+
+
+d<- nba %>% group_by(game_id, Team_Abbrev) %>%
+  mutate(Team_Ft_Attempts= sum(fta),
+         Team_Assts= sum(ast), 
+         Team_Steal= sum(stl),
+         Team_tov=sum(tov),
+         Team_asst_to_tov= Team_Assts/Team_tov)
+head(d)
+
+d2<- d %>% group_by(game_id) %>%
+  filter(H_A=="H") %>%
+  filter(row_number()==1) %>%
+  select(game_id, H_A, Team_Abbrev, Team_Score, Team_Ft_Attempts, Team_Assts, Team_orb_pct, Team_Steal, Team_tov, Team_asst_to_tov, Opponent_Abbrev, Opponent_Score, Opponent_tov_pct, Opponent_orb_pct, Team_ID, Game_ID) %>% 
+  mutate(Team_W= ifelse(Team_Score>Opponent_Score,1,0),
+         Conf= ifelse(Team_Abbrev=="CHO" | Team_Abbrev=="CLE" | Team_Abbrev=="NYK" | Team_Abbrev=="ORL" | Team_Abbrev=="PHI" | Team_Abbrev=="IND" | Team_Abbrev=="CHI" | Team_Abbrev=="MIL" | Team_Abbrev=="DET" | Team_Abbrev=="ATL" | Team_Abbrev=="MIA" | Team_Abbrev=="TOR" | Team_Abbrev=="WAS" | Team_Abbrev=="BOS", "East", "West"))
+
+
+nbacolors<- teamcolors %>% filter(league=="nba") %>%
+  select(name, primary, secondary, tertiary, division)
+nbacolors
+
+LUT<- c("CHO" = nbacolors$name[4], 
+          "CLE" = nbacolors$name[6],
+        "NYK" = nbacolors$name[20],
+        "ORL" = nbacolors$name[22],
+        "PHI" = nbacolors$name[23],
+        "IND" = nbacolors$name[12],
+        "CHI" = nbacolors$name[5],
+        "MIL" = nbacolors$name[17], 
+        "DET" = nbacolors$name[9],
+        "ATL" = nbacolors$name[1],
+        "MIA" = nbacolors$name[16],
+        "TOR" = nbacolors$name[28],
+        "WAS" = nbacolors$name[30],
+        "BOS" = nbacolors$name[2],
+        "BRK" = nbacolors$name[3],
+        "DAL" = nbacolors$name[7],
+        "DEN" = nbacolors$name[8],
+        "HOU" = nbacolors$name[11],
+        "LAC" = nbacolors$name[13],
+        "MEM" = nbacolors$name[15],
+        "MIN" = nbacolors$name[18],
+        "NOP" = nbacolors$name[19],
+        "PHO" = nbacolors$name[24],
+        "POR" = nbacolors$name[25],
+        "SAC" = nbacolors$name[26],
+        "GSW" = nbacolors$name[10],
+        "SAS" = nbacolors$name[27],
+        "OKC" = nbacolors$name[21],
+        "LAL" = nbacolors$name[14],
+        "UTA" = nbacolors$name[29])
+
+
+d2$Team<- LUT[d2$Team_Abbrev]
+head(d2)
+head(n)
+
+d2<- merge(d2, nbacolors, by.x = "Team", by.y = "name")
+head(d2)
+```
+
+```{r}
+ggplot(d2, aes(x = Team_Assts, y = Team_Abbrev, fill = primary )) +
+  geom_density_ridges() +
+  theme_ridges() + 
+  theme(legend.position = "none")
+```
+
+```{r}
+ggplot(d2, aes(x = Team_tov, y = Team_Abbrev, fill = Team_Abbrev)) +
+  geom_density_ridges() +
+  theme_ridges() + 
+  theme(legend.position = "none")
+```
+
+```{r}
+ggplot(d2, aes(x = Team_Ft_Attempts, y = Team_Abbrev, fill = Team_Abbrev)) +
+  geom_density_ridges() +
+  theme_ridges() + 
+  theme(legend.position = "none")
+```
+
+
+```{r}
+ggplot(d2, aes(x = Team_orb_pct, y = Team_Abbrev, fill = d2$primary)) +
+  geom_density_ridges() +
+  theme_ridges() + 
+  theme(legend.position = "none")
+```
+
+# descriptives
+
+```{r}
+head(d2)
+describe(d2)
+
+```
+
+
+# in mcmc
+
+shouldn't have to add a fixed effect (?) for game because we are only predicting home team win here -- so there aren't double games
+
+```{r}
+
+dat <- with( d2 , list(
+Team_W = Team_W,
+Team_ID = Team_ID,
+Team_asst_to_tov = Team_asst_to_tov,
+Team_Ft_Attempts = Team_Ft_Attempts,
+Team_orb_pct= Team_orb_pct,
+Team_Steal= Team_Steal) )
+
+
+win_nonscoring <- ulam(
+alist(
+Team_W ~ dbinom( 1 , p ) ,
+logit(p) <- a[Team_ID] + b*( Team_asst_to_tov) + b2*(Team_Ft_Attempts)+ b3*(Team_orb_pct) +b4*(Team_Steal),
+a[Team_ID] ~ dnorm( 1, 0.1 ) ,
+b ~ dnorm( 3 , 1),
+b2 ~ dnorm(20,5),
+b3 ~ dnorm(0,1.5),
+b4 ~ dnorm(6,3)
+) , data=dat , chains=4 , log_lik=TRUE)
+
+precis(win_nonscoring, depth=2)
+```
+
+
+### prior sim
+
+```{r}
+prior <- extract.prior( win_nonscoring , n=1e4 )
+p <- inv_logit( prior$a )
+dens( p , adj=0.1 )
+```
+our priors show most of the probability space of winning is between .7 and .8. what happens if we use flatter priors?
+
+
+
+### sample from posterior -- win probability estimates
+
+```{r}
+post <- extract.samples(win_nonscoring)
+p_left <- inv_logit( post$a )
+plot( precis( as.data.frame(p_left) ) , xlim=c(0,1) )
+
+### this is comparing team 26 (kings) to team 15 (grizzlies)
+diff_a <- post$a[,26] - post$a[,15]
+diff_p <- inv_logit(post$a[,26]) - inv_logit(post$a[,15])
+precis( list( diff_a=diff_a , diff_p=diff_p ) )
+```
+
+outcome scale of winning for each team. are we surprised these are all so similar?
+
+team winning percentage
+```{r}
+pl <- by( d2$Team_W , list( d2$Team_Abbrev) , mean )
+```
+
+## could re run that analysis and predict score differential
+
+```{r}
+dat2 <- with( d2 , list(
+Team_Score = Team_Score,
+Team_ID = Team_ID,
+Team_asst_to_tov = Team_asst_to_tov,
+Team_Ft_Attempts = Team_Ft_Attempts,
+Team_orb_pct= Team_orb_pct,
+Team_Steal= Team_Steal) )
+
+
+points_nonscoring <- ulam(
+alist(
+Team_Score ~ dnorm( mu , sigma ) ,
+mu <- a[Team_ID] + b*( Team_asst_to_tov) + b2*(Team_Ft_Attempts)+ b3*(Team_orb_pct) +b4*(Team_Steal),
+a[Team_ID] ~ dnorm( 1, 0.1 ) ,
+b ~ dnorm( 3 , 1),
+b2 ~ dnorm(20,5),
+b3 ~ dnorm(0,1.5),
+b4 ~ dnorm(6,3),
+sigma ~ dexp(1)
+) , data=dat2 , chains=4 , log_lik=TRUE)
+
+precis(points_nonscoring, depth=2)
+
+plot(precis(points_nonscoring))
+
+
+post <- extract.samples(points_nonscoring)
+p_left <- inv_logit( post$a )
+plot( precis( as.data.frame(p_left) ) , xlim=c(0,1) )
+
+### this is comparing team 26 (kings) to team 15 (grizzlies)
+diff_a <- post$a[,26] - post$a[,15]
+diff_p <- inv_logit(post$a[,26]) - inv_logit(post$a[,15])
+precis( list( diff_a=diff_a , diff_p=diff_p ) )
+
+```
+
+
+### team level analysis -- use home/away, personal stats? to predict # of points
+
+
+
+# in bayes
+
+here: we are allowing varying intercepts for team and varying intercepts for game just normal indexed slope for home vs away.
+
+plot some kind of semi basic posterior prediction after this.  (if we do binary w/l it might be easier to plot like the tadpol one)
+
+```{r}
+
+dat_2 <- with( nba , list(
+Game_ID = Game_ID,
+Team_ID=Team_ID,
+H_A=ifelse(H_A=="H", 1, 2),
+Team_Score=Team_Score) )
+
+
+points_H_A <- ulam(
+alist(
+Team_Score ~ dnorm( mu , sigma ) ,
+mu <- a[Team_ID] + g[Game_ID] + b[H_A],
+a[Team_ID] ~ dnorm( 1, 0.1 ) ,
+g[Game_ID] ~ dnorm(1, 0.1),
+b[H_A] ~ dnorm( 7 , 3),
+sigma ~ dexp(1)
+) , data=dat_2 , chains=4 , log_lik=TRUE)
+
+
+tail(precis(points_H_A, depth=2))
+
+### compute contrast
+
+ps<- extract.samples(points_H_A)
+
+diff_b <- ps$b[,1] - ps$b[,2] 
+precis( list( diff_b=diff_b ) )
+
+
+### plot
+ps_d<- as.data.frame(ps)
+head(ps_d)
+
+teams<- seq(2,30,1)
+dens(ps$a[,i], xlim = c(0, 2), lwd = 3, col = i, xlab = 
+"posterior mean difference in team points for home vs away")
+for (i in teams) {
+  dens(ps$a[,i], xlim = c(0, 2), lwd = 3, col = i, xlab = 
+"posterior mean difference in team points for home vs away", add=T)
+}
+
+team1 <- rnorm(1e4, ps$a[,1], ps$sigma)
+teams<- seq(2,30,1)
+dens(team1, lwd = 3, col = 1, xlab = 
+"posterior predicted mean difference in team points for home vs away")
+for (i in teams) {
+  teami <- rnorm(1e4, ps$a[,i], ps$sigma)
+  dens(teami, lwd = 3, col = i, add = TRUE)
+}
+
+
+```
+
+
+last analysis: team level do individual player stats impact points
+```{r}
+
+samp<- sample(nba$game_id, 50, replace=F)
+val<- subset(nba, nba$game_id %in% samp)
+
+
+dat_full <- with( nba , list(
+Game_ID = Game_ID,
+Player_ID = Player_ID,
+plus_minus = plus_minus,
+double_double = ifelse(double_double==1,1,2),
+drb_pct= drb_pct,
+Team_Score=Team_Score) )
+
+points_H_A <- ulam(
+alist(
+Team_Score ~ dnorm( mu , sigma ) ,
+mu <- a[Team_ID] + g[Game_ID] + b[H_A],
+a[Team_ID] ~ dnorm( 1, 0.1 ) ,
+g[Game_ID] ~ dnorm(1, 0.1),
+b[H_A] ~ dnorm( 7 , 3),
+sigma ~ dexp(1)
+) , data=dat_2 , chains=4 , log_lik=TRUE)
+
+points_players <- ulam(
+alist(
+Team_Score ~ dnorm( mu , sigma ) ,
+mu <- a[Game_ID] + g[Player_ID] + b*plus_minus + b2[double_double] + b3*(drb_pct),
+a[Game_ID] ~ dnorm( 1, 0.1 ) ,
+g[Player_ID] ~ dnorm(1, 0.1),
+b ~ dnorm( 0, 3 ),
+b2[double_double] ~ dnorm(0, 3),
+b3 ~ dnorm(0, 3),
+sigma ~ dexp(1)
+) , data=dat_full, chains=4 , cores=4 , log_lik=TRUE )
+
+tail(precis(points_players, depth=2))
+
+post <- extract.samples(points_players)
+diff_b <- post$b2[,1] - post$b2[,2]
+precis( list( diff_b=diff_b ) )
+```
+
+
+
+### plot these relationships by team
+
+
+```{r}
+library(RColorBrewer)
+myColors <- nbacolors$primary
+names(myColors) <- levels(d2$Team_Abbrev)
+colScale <- scale_colour_manual(name = "Team_Abbrev",values = myColors)
+```
+
+
+```{r}
+p<- ggplot(data=d2, mapping=aes(x=Team_Ft_Attempts, y=Team_Score, colour=Team_Abbrev))
+p + geom_point(color = d2$primary) + geom_smooth(method = "lm", se=F)+
+  facet_grid(~division)+
+  labs(x="Number of Team Free Throw Attempts per Game", y="Total Team Points per Game") +
+   scale_color_manual(values=d2$primary)+
+  colScale
+```
+
+```{r}
+p<- ggplot(data=d2, mapping=aes(x=Team_asst_to_tov, y=Team_Score, colour=Team_Abbrev))
+p + geom_point(color=d2$primary) + geom_smooth(method = "lm", se=F)+
+  facet_grid(~division)+
+  labs(x="Number of Team Assists to Turnovers Ratio per Game", y="Total Team Points per Game")+
+  scale_color_manual(values=d2$primary)+
+  colScale
+
+```
+
+
+```{r}
+p<- ggplot(data=d2, mapping=aes(x=Team_orb_pct, y=Team_Score, colour=Team_Abbrev))
+p + geom_point(color = d2$primary) + geom_smooth(method = "lm", se=F)+
+  facet_grid(~division)+
+  labs(x="Team Offensive Rebound Percentage per Game", y="Total Team Points per Game")+
+  colScale
+```
+
+
+
+```{r}
+p<- ggplot(data=d2, mapping=aes(x=Team_Steal, y=Team_Score, colour=Team_Abbrev))
+
+p + geom_point(color = d2$primary) + geom_smooth(method = "lm", se=F)+
+  facet_grid(~division)+
+  labs(x="Number of Team Steals per Game", y="Total Team Points per Game", fill="Team") +
+  colScale +
+   theme(legend.key.size = unit(1, 'cm'), #change legend key size
+        legend.key.height = unit(1, 'cm'), #change legend key height
+        legend.key.width = unit(1, 'cm'), #change legend key width
+        legend.title = element_text(size=14), #change legend title font size
+        legend.text = element_text(size=10)) #change legend text font size
+
+```
+
